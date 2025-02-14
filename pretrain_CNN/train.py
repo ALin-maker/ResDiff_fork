@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,17 +9,18 @@ from tqdm import tqdm
 from torchvision import transforms
 import torch.nn.functional as F
 
-from pretrain_CNN.dataset import SuperResolutionDataset
-from pretrain_CNN.Simple_CNN import SimpleCNN
-from pretrain_CNN.loss import image_compare_loss
+from dataset import SuperResolutionDataset
+from Simple_CNN import SimpleCNN
+from loss import image_compare_loss
 
 
-# trian function
+# train function
 def train(model, train_loader, criterion, optimizer, device):
     model.train()
     train_loss = 0.0
 
-    for inputs, targets in tqdm(train_loader):
+    for data in tqdm(train_loader, desc="Training"):
+        inputs, targets = data[:2]  # 只取 lr_image 和 hr_image
         inputs = inputs.to(device)
         targets = targets.to(device)
 
@@ -34,6 +36,7 @@ def train(model, train_loader, criterion, optimizer, device):
     return train_loss / len(train_loader)
 
 
+
 # evaluate function
 def calculate_psnr_batch(pred_batch, target_batch, max_val=1.0):
     """Calculate the mean PSNR of all images within a batch"""
@@ -46,42 +49,40 @@ def calculate_psnr_batch(pred_batch, target_batch, max_val=1.0):
 
 
 def evaluate(model, dataloader, device):
-    root = '/home/lyu4/datasets/ffhq/4x_32_128/cnn_sr_32_128'
     model.eval()
     total_psnr = 0.0
     with torch.no_grad():
-        for data in tqdm(dataloader, desc='Test', leave=False):
-            inputs, targets = data
+        for inputs, targets in tqdm(dataloader, desc='Evaluating', leave=False):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = model(inputs)
             total_psnr += calculate_psnr_batch(outputs, targets)
     avg_psnr = total_psnr / len(dataloader)
     return avg_psnr
 
+
 # Save the CNN prediction results
 def save_res(model, dataloader, device):
-    root = '/home/lyu4/datasets/ffhq/4x_32_128/cnn_sr_32_128'
+    root = '/root/autodl-tmp/ResDiff/dataset/prepare_data_test_png_16_128/cnn_sr_16_128'
     model.eval()
     with torch.no_grad():
-        for data in tqdm(dataloader, desc='Test', leave=False):
-            inputs, targets , path , _ = data
+        for inputs, targets, path, _ in tqdm(dataloader, desc='Saving Results', leave=False):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = model(inputs)
-            image = ((outputs[0] + 1) / 2)
-            path = path[0].replace('lr_32','cnn_sr_32_128')
-            save_image(image, path)
+            image = ((outputs[0] + 1) / 2)  # Normalize image
+            save_path = path[0].replace('lr_32', 'cnn_sr_16_128')
+            save_image(image, save_path)
 
 
 def main():
     # Setting parameters
-    scale_factor = 4
+    scale_factor = 8
     batch_size = 1
     lr = 1e-4
-    epochs = 1
+    epochs = 100
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    hr_dir = '/home/lyu4/datasets/ffhq/4x_32_128/hr_128'
-    lr_dir = '/home/lyu4/datasets/ffhq/4x_32_128/lr_32'
+    hr_dir = '/root/autodl-tmp/ResDiff/dataset/prepare_data_test_png_16_128/hr_128'
+    lr_dir = '/root/autodl-tmp/ResDiff/dataset/prepare_data_test_png_16_128/lr_16'
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -89,25 +90,40 @@ def main():
 
     # Create dataset
     train_dataset = SuperResolutionDataset(hr_dir, lr_dir, transform)
-    test_dataset=SuperResolutionDataset(hr_dir, lr_dir, transform,train=False)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    test_dataset = SuperResolutionDataset(hr_dir, lr_dir, transform, train=False)
+    
+    # Set shuffle=True for better training
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Create models, loss functions and optimizers
+    # Create model
     model = SimpleCNN(scale_factor=scale_factor).to(device)
-    model.load_state_dict(torch.load('pretrain_CNN/cnn_weights.pth'))
+
+    # Check if pre-trained weights exist
+    weight_path = 'pretrain_weights/cnn_weights.pth'
+    if os.path.exists(weight_path):
+        model.load_state_dict(torch.load(weight_path))
+        print(f"Loaded pre-trained weights from {weight_path}")
+    else:
+        print(f"No pre-trained weights found at {weight_path}. Using random initialization.")
+
+    # Define loss function and optimizer
     criterion = image_compare_loss
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    # Training and evaluation models, and save the model weights along with prediction images
+    # Training and evaluation
     for epoch in range(epochs):
         train_loss = train(model, train_loader, criterion, optimizer, device)
         test_psnr = evaluate(model, test_loader, device)
-        print('Epoch [{}/{}], Train Loss: {:.4f}, '
-              'Test PSNR: {:.4f}'.format(epoch + 1, epochs, train_loss, test_psnr))
 
-        torch.save(model.state_dict(), 'cnn_weights_not_res.pth')
+        print(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {train_loss:.4f}, Test PSNR: {test_psnr:.4f}')
 
+        # Save trained model
+        save_model_path = 'pretrain_weights/cnn_weights.pth'
+        torch.save(model.state_dict(), save_model_path)
+        print(f"Model saved to {save_model_path}")
+
+    # Save prediction results
     save_res(model, test_loader, device)
 
 
