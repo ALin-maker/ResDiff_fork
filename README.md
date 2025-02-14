@@ -10,7 +10,7 @@ Once the paper is accepted, we will refine the code and release it as soon as po
 
 ### Environment
 ```shell
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 ### Data Prepare
@@ -51,7 +51,8 @@ Then change the dataset config to your data path and image resolution:
 Modify the parameters in several files in the /pretrain_CNN directory, and then run the following script directly.
 
 ```shell
-python pretrain_CNN/train.py
+pretrain_CNN
+python train.py
 ```
 
 The CNN predictions will be written to the specified path, 
